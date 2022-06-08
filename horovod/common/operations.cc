@@ -21,7 +21,9 @@
 
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstring>
+#include <iostream>
 #include <map>
 #include <numeric>
 #include <queue>
@@ -1262,6 +1264,11 @@ int horovod_add_process_set(const int* ranks, int nrank) {
 }
 
 int horovod_remove_process_set(int process_set_id) {
+  using std::chrono::high_resolution_clock;
+  using std::chrono::duration;
+
+  auto start = high_resolution_clock::now();
+
   if (!horovod_global.initialization_done) {
     return HOROVOD_PROCESS_SET_ERROR_INIT;
   }
@@ -1283,6 +1290,10 @@ int horovod_remove_process_set(int process_set_id) {
   // Block until the background thread has removed the process set.
   while (true) {
     if (horovod_global.process_set_table.ProcessSetHasJustBeenRemoved()) {
+      auto end = high_resolution_clock::now();
+      duration<double, std::milli> ms = end - start;
+      std::cerr << horovod_global.global_controller->GetRank()
+          << "horovod_remove_process_set took " << ms.count() << "ms" << std::endl;
       return process_set_id;
     }
     if (horovod_global.shut_down) {
