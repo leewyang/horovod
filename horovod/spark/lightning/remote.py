@@ -101,6 +101,9 @@ def RemoteTrainer(estimator, metadata, ckpt_bytes, run_id, dataset_idx, train_ro
     profiler = estimator.getProfiler()
 
     def train(serialized_model):
+        import multiprocessing as mp
+        mp.set_start_method("spawn")
+
         import horovod.torch as hvd
 
         if random_seed is not None:
