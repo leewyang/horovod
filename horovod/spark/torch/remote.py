@@ -101,6 +101,9 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
 
     def train(serialized_model, optimizer_cls, model_opt_state_serialized,
               train_rows, val_rows, avg_row_size):
+        import multiprocessing as mp
+        mp.set_start_method("spawn")
+
         from petastorm import TransformSpec, make_reader, make_batch_reader
         from petastorm.pytorch import BatchedDataLoader, InMemBatchedDataLoader
         import torch
