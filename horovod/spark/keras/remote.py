@@ -104,6 +104,9 @@ def RemoteTrainer(estimator, metadata, keras_utils, run_id, dataset_idx):
         yield None
 
     def train(serialized_model, train_rows, val_rows, avg_row_size):
+        import multiprocessing as mp
+        mp.set_start_method("spawn")
+
         from petastorm import TransformSpec, make_reader, make_batch_reader
         import horovod as _horovod
         k = get_keras()
