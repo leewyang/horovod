@@ -59,7 +59,7 @@ def broadcast_parameters(params, root_rank):
         synchronize(handle)
 
 
-def broadcast_optimizer_state(optimizer, root_rank):
+def broadcast_optimizer_state(optimizer, root_rank, model=None):
     """
     Broadcasts an optimizer state from root rank to all other processes.
 
@@ -77,6 +77,14 @@ def broadcast_optimizer_state(optimizer, root_rank):
 
     state_dict = optimizer.state_dict()
 
+    # Use model to identify sparse parameters
+    sparse_params = []
+    if model:
+        for m in model.modules():
+            if isinstance(m, torch.nn.modules.sparse.Embedding) and m.sparse:
+                for p in m.parameters():
+                    sparse_params.append(id(p))
+
     # Newly created optimizers will not have their state initialized, so
     # do that initialization here
     if len(state_dict['state']) == 0:
@@ -84,7 +92,8 @@ def broadcast_optimizer_state(optimizer, root_rank):
             for p in group['params']:
                 if p.requires_grad and id(p) not in state_dict['state']:
                     p.grad = p.data.new(p.size()).zero_()
-                    if isinstance(optimizer, torch.optim.SparseAdam):
+                    if isinstance(optimizer, torch.optim.SparseAdam) or \
+                            (isinstance(optimizer, torch.optim.SGD) and id(p) in sparse_params):
                         p.grad = p.grad.to_sparse()
 
         # This function accepts a torch.optim.Optimizer or a DistributedOptimizer
