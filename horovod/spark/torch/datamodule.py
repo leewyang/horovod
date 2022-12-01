@@ -164,6 +164,7 @@ class NVTabularDataModule(DataModule):
         self.label_cols = label_cols
         self.categorical_cols = categorical_cols
         self.continuous_cols = continuous_cols
+        self.kwargs = kwargs
 
     @staticmethod
     def seed_fn():
@@ -194,12 +195,8 @@ class NVTabularDataModule(DataModule):
         import nvtabular as nvt
         from nvtabular.loader.torch import TorchAsyncItr, DLDataLoader
 
-        # HACK: TODO: fix scheme handling
-        if self.train_dir.startswith("file://"):
-            TRAIN_PATHS = sorted(glob.glob(os.path.join(self.train_dir[7:], "*.parquet")))
-
         train_dataset = TorchAsyncItr(
-            nvt.Dataset(TRAIN_PATHS),
+            nvt.Dataset(self.train_dir, engine='parquet', calculate_divisions=True, **self.kwargs),
             batch_size=self.train_batch_size,
             cats=self.categorical_cols,
             conts=self.continuous_cols,
@@ -217,13 +214,8 @@ class NVTabularDataModule(DataModule):
         import nvtabular as nvt
         from nvtabular.loader.torch import TorchAsyncItr, DLDataLoader
 
-        # HACK: TODO: fix scheme handling
-        if self.val_dir.startswith("file://"):
-            VAL_PATHS = sorted(
-                glob.glob(os.path.join(self.val_dir[7:], "*.parquet")))
-
         val_dataset = TorchAsyncItr(
-            nvt.Dataset(VAL_PATHS),
+            nvt.Dataset(self.val_dir, engine='parquet', calculate_divisions=True, **self.kwargs),
             batch_size=self.val_batch_size,
             cats=self.categorical_cols,
             conts=self.continuous_cols,
