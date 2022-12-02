@@ -162,32 +162,46 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
         # reconstructed deserialized object and that creates problem.
         # Learning rate is a required parameters in SGD optimizer. It will be overridden with
         # load_state_dict.
-        optimizer = optimizer_cls(model.parameters(), lr=1)
         optimizer_state = model_opt_state['optimizer']
+        if isinstance(optimizer_cls, list):
+            optimizer = [opt_cls(model.parameters(), lr=1) for opt_cls in optimizer_cls]
+        else:
+            optimizer = optimizer_cls(model.parameters(), lr=1)
 
         if last_checkpoint_state is not None:
             model.load_state_dict(last_checkpoint_state['model'])
-            optimizer.load_state_dict(last_checkpoint_state['optimizer'])
+            optimizer.load_state_dict(last_checkpoint_state['optimizer'])   # TODO: support list of optimizers
         else:
             # scale the learning rate with the number of horovod workers
-            for i in range(len(optimizer_state['param_groups'])):
-                optimizer_state['param_groups'][i]['lr'] = \
-                    optimizer_state['param_groups'][i]['lr'] * hvd.size()
-
-            optimizer.load_state_dict(optimizer_state)
+            def _scale_lr(opt_state):
+                for i in range(len(opt_state['param_groups'])):
+                    opt_state['param_groups'][i]['lr'] = \
+                        opt_state['param_groups'][i]['lr'] * hvd.size()
+                return opt_state
+            if isinstance(optimizer_state, list):
+                for x, opt in enumerate(optimizer):
+                    opt.load_state_dict(_scale_lr(optimizer_state[x]))
+            else:
+                optimizer.load_state_dict(_scale_lr(optimizer_state))
 
         # Horovod: broadcast parameters & optimizer state.
         hvd.broadcast_parameters(model.state_dict(), root_rank=0)
-        hvd.broadcast_optimizer_state(optimizer, root_rank=0, model=model)
+        hvd.broadcast_optimizer_state(optimizer, root_rank=0, model=model)  # TODO: support list of optimizers
 
-        dist_optimizer_args = dict(optimizer=optimizer,
-                                   named_parameters=model.named_parameters())
-        if gradient_compression:
-            # Pass the compression arg only if it is specified by the user.
-            dist_optimizer_args['compression'] = gradient_compression
-        dist_optimizer_args['backward_passes_per_step'] = backward_passes_per_step
-        # Horovod: wrap optimizer with DistributedOptimizer.
-        optimizer = hvd.DistributedOptimizer(**dist_optimizer_args)
+        def _dist_optimizer(optimizer):
+            # Horovod: wrap optimizer with DistributedOptimizer.
+            dist_optimizer_args = dict(optimizer=optimizer,
+                                       named_parameters=model.named_parameters(),
+                                       backward_passes_per_step=backward_passes_per_step)
+            if gradient_compression:
+                # Pass the compression arg only if it is specified by the user.
+                dist_optimizer_args['compression'] = gradient_compression
+            return hvd.DistributedOptimizer(**dist_optimizer_args)
+
+        if isinstance(optimizer, list):
+            optimizer = [_dist_optimizer(opt) for opt in optimizer]
+        else:
+            optimizer = _dist_optimizer(optimizer)
 
         # This function takes the current optimizer and constructs a new optimizer with the
         # same state except with learning rate scaled down with the number of horovod workers.
@@ -404,7 +418,7 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
                     history.append(epoch_metrics)
                     if hvd.rank() == 0:
                         # Save model after every epoch
-                        save_checkpoint()
+                        # save_checkpoint()
                         if remote_store.saving_runs:
                             remote_store.sync(run_output_dir)
 
@@ -422,8 +436,14 @@ def _train_minibatch_fn():
     def train_minibatch(model, optimizer, transform_outputs, loss_fn, inputs, labels, sample_weights, backward_passes_per_step, batch_idx):
         if batch_idx % backward_passes_per_step == 0:
             if batch_idx != 0:
-                optimizer.step()
-            optimizer.zero_grad()
+                if isinstance(optimizer, list):
+                    [opt.step() for opt in optimizer]
+                else:
+                    optimizer.step()
+            if isinstance(optimizer, list):
+                [opt.zero_grad() for opt in optimizer]
+            else:
+                optimizer.zero_grad()
         outputs = model(*inputs)
         outputs, labels = transform_outputs(outputs, labels)
         loss = loss_fn(outputs, labels, sample_weights)

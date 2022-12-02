@@ -257,16 +257,22 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
 
     # Overwrites Model's getOptimizer method
     def getOptimizer(self):
+        optimizer = self._get_optimizer()
         model = self.getModel()
         if model:
-            optimizer = self._get_optimizer()
-            optimizer_cls = optimizer.__class__
-            optimizer_state = optimizer.state_dict()
-            optimzer = optimizer_cls(model.parameters(), lr=1)
-            optimzer.load_state_dict(optimizer_state)
-            return optimzer
+            def _opt_with_model(optimizer, model):
+                optimizer_cls = optimizer.__class__
+                optimizer_state = optimizer.state_dict()
+                optimzer = optimizer_cls(model.parameters(), lr=1)
+                optimzer.load_state_dict(optimizer_state)
+                return optimizer
+
+            if isinstance(optimizer, list):
+                return [_opt_with_model(opt, model) for opt in optimizer]
+            else:
+                return _opt_with_model(optimizer, model)
         else:
-            return self._get_optimizer()
+            return optimizer
 
     def _check_metadata_compatibility(self, metadata):
         util.check_shape_compatibility(metadata,
@@ -293,8 +299,12 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
 
         # Optimizer parameters
         optimizer = self._get_optimizer()
-        optimizer_cls = optimizer.__class__
-        optimizer_state = optimizer.state_dict()
+        if isinstance(optimizer, list):
+            optimizer_cls = [opt.__class__ for opt in optimizer]
+            optimizer_state = [opt.state_dict() for opt in optimizer]
+        else:
+            optimizer_cls = optimizer.__class__
+            optimizer_state = optimizer.state_dict()
 
         # Combine model and optimizer state
         model_opt_state = {'model': model_state, 'optimizer': optimizer_state} \
