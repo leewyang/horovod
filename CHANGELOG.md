@@ -7,8 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] - YYYY-MM-DD
 
 ### Added
-- Spark Estimator: Added support for custom data loaders in TorchEstimator.
-- Spark Estimator: Added NVTabular data loader for TorchEstimator.
+- Spark Estimator: Added support for custom data loaders in TorchEstimator. ([#3787](https://github.com/horovod/horovod/pull/3787))
+- Spark Estimator: Added NVTabular data loader for TorchEstimator. ([#3787](https://github.com/horovod/horovod/pull/3787))
 
 ### Changed
 
