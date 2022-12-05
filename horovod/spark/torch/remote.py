@@ -17,6 +17,7 @@
 import io
 import math
 import os
+from typing import Callable
 import warnings
 from datetime import datetime, timezone
 
@@ -163,14 +164,20 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
         # Learning rate is a required parameters in SGD optimizer. It will be overridden with
         # load_state_dict.
         optimizer_state = model_opt_state['optimizer']
-        if isinstance(optimizer_cls, list):
-            optimizer = [opt_cls(model.parameters(), lr=1) for opt_cls in optimizer_cls]
+        if isinstance(optimizer_cls, Callable):
+            optimizer = optimizer_cls(model)
         else:
             optimizer = optimizer_cls(model.parameters(), lr=1)
+        print(f"<<<< optimizer: {optimizer}")
+        print(f"<<<< optimizer_state: {optimizer_state}")
 
         if last_checkpoint_state is not None:
             model.load_state_dict(last_checkpoint_state['model'])
-            optimizer.load_state_dict(last_checkpoint_state['optimizer'])   # TODO: support list of optimizers
+            if isinstance(optimizer, list):
+                for i, opt in enumerate(optimizer):
+                    opt.load_state_dict(last_checkpoint_state['optimizer'][i])
+            else:
+                optimizer.load_state_dict(last_checkpoint_state['optimizer'])
         else:
             # scale the learning rate with the number of horovod workers
             def _scale_lr(opt_state):
@@ -178,15 +185,17 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
                     opt_state['param_groups'][i]['lr'] = \
                         opt_state['param_groups'][i]['lr'] * hvd.size()
                 return opt_state
-            if isinstance(optimizer_state, list):
+            if isinstance(optimizer, list):
                 for x, opt in enumerate(optimizer):
+                    print(f"===== optimizer[{x}]: {opt}")
+                    print(f"===== optimizer_state[{x}]: {optimizer_state[x]}")
                     opt.load_state_dict(_scale_lr(optimizer_state[x]))
             else:
                 optimizer.load_state_dict(_scale_lr(optimizer_state))
 
         # Horovod: broadcast parameters & optimizer state.
         hvd.broadcast_parameters(model.state_dict(), root_rank=0)
-        hvd.broadcast_optimizer_state(optimizer, root_rank=0, model=model)  # TODO: support list of optimizers
+        # hvd.broadcast_optimizer_state(optimizer, root_rank=0, model=model)  # TODO: support list of optimizers
 
         def _dist_optimizer(optimizer):
             # Horovod: wrap optimizer with DistributedOptimizer.
@@ -227,9 +236,13 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
                 model.cpu()
                 optimizer_with_scaled_down_lr = \
                     get_optimizer_with_unscaled_lr(hvd, optimizer, optimizer_cls, model)
+                if isinstance(optimizer_with_scaled_down_lr, list):
+                    optimizer_state_dict = [opt.state_dict() for opt in optimizer_with_scaled_down_lr]
+                else:
+                    optimizer_state_dict = optimizer_with_scaled_down_lr.state_dict()
                 state = {
                     'model': model.state_dict(),
-                    'optimizer': optimizer_with_scaled_down_lr.state_dict(),
+                    'optimizer': optimizer_state_dict,
                 }
                 torch.save(state, ckpt_file)
                 if cuda_available:
@@ -363,7 +376,10 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
                     update_metrics(metric_value_groups, outputs, labels)
                     train_loss.update(loss)
                     print_metrics(batch_idx, train_loss, metric_value_groups, 'train')
-                optimizer.step()
+                if isinstance(optimizer, list):
+                    [opt.step for opt in optimizer]
+                else:
+                    optimizer.step()
 
                 return aggregate_metrics('train', epoch, train_loss, metric_value_groups)
 
@@ -418,7 +434,7 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
                     history.append(epoch_metrics)
                     if hvd.rank() == 0:
                         # Save model after every epoch
-                        # save_checkpoint()
+                        save_checkpoint()
                         if remote_store.saving_runs:
                             remote_store.sync(run_output_dir)
 
@@ -456,14 +472,24 @@ def _train_minibatch_fn():
 
 def _get_optimizer_with_unscaled_lr_fn():
     def get_optimizer_with_unscaled_lr(hvd, current_optimizer, optimizer_cls, model):
-        optimizer_state = current_optimizer.state_dict()
-        # scale down the learning rate with the number of horovod workers
-        for i in range(len(optimizer_state['param_groups'])):
-            optimizer_state['param_groups'][i]['lr'] = \
-                optimizer_state['param_groups'][i]['lr'] / hvd.size()
-        optimizer = optimizer_cls(model.parameters(), lr=1)
-        optimizer.load_state_dict(optimizer_state)
-        return optimizer
+        def _scale_lr(optimizer_state):
+            # scale down the learning rate with the number of horovod workers
+            for i in range(len(optimizer_state['param_groups'])):
+                optimizer_state['param_groups'][i]['lr'] = \
+                    optimizer_state['param_groups'][i]['lr'] / hvd.size()
+            return optimizer_state
+
+        if isinstance(optimizer_cls, Callable):
+            optimizers = optimizer_cls(model)
+            optimizer_state = [_scale_lr(opt.state_dict()) for opt in current_optimizer]
+            for x, opt in enumerate(optimizers):
+                opt.load_state_dict(optimizer_state[x])
+            return optimizers
+        else:
+            optimizer = optimizer_cls(model.parameters(), lr=1)
+            optimizer_state = _scale_lr(current_optimizer.state_dict())
+            optimizer.load_state_dict(optimizer_state)
+            return optimizer
 
     return get_optimizer_with_unscaled_lr
 

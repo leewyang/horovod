@@ -38,6 +38,8 @@ from horovod.spark.torch.datamodule import PetastormDataModule
 from horovod.spark.torch.util import deserialize_fn, serialize_fn, \
     save_into_bio
 
+from typing import Callable
+
 import numpy as np
 import torch
 import torch.utils.data
@@ -260,17 +262,14 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
         optimizer = self._get_optimizer()
         model = self.getModel()
         if model:
-            def _opt_with_model(optimizer, model):
+            if isinstance(optimizer, Callable):
+                return optimizer(model)
+            else:
                 optimizer_cls = optimizer.__class__
                 optimizer_state = optimizer.state_dict()
                 optimzer = optimizer_cls(model.parameters(), lr=1)
                 optimzer.load_state_dict(optimizer_state)
                 return optimizer
-
-            if isinstance(optimizer, list):
-                return [_opt_with_model(opt, model) for opt in optimizer]
-            else:
-                return _opt_with_model(optimizer, model)
         else:
             return optimizer
 
@@ -299,9 +298,10 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
 
         # Optimizer parameters
         optimizer = self._get_optimizer()
-        if isinstance(optimizer, list):
-            optimizer_cls = [opt.__class__ for opt in optimizer]
-            optimizer_state = [opt.state_dict() for opt in optimizer]
+        if isinstance(optimizer, Callable):
+            optimizers = optimizer(model_pre_train)
+            optimizer_state = [opt.state_dict() for opt in optimizers]
+            optimizer_cls = optimizer
         else:
             optimizer_cls = optimizer.__class__
             optimizer_state = optimizer.state_dict()
@@ -341,7 +341,10 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
 
         model.load_state_dict(best_checkpoint['model'])
         model.eval()
-        optimizer.load_state_dict(best_checkpoint['optimizer'])
+        if isinstance(optimizer, list):
+            [opt.load_state_dict(best_checkpoint['optimizer'][i]) for i, opt in enumerate(optimizer)]
+        else:
+            optimizer.load_state_dict(best_checkpoint['optimizer'])
 
         return self.get_model_class()(**self._get_model_kwargs(
             model, history, optimizer, run_id, metadata))
@@ -434,16 +437,7 @@ class TorchModel(HorovodModel, TorchEstimatorParamsWritable, TorchEstimatorParam
         return self.getOrDefault(self.optimizer)
 
     def getOptimizer(self):
-        model = self.getModel()
-        if model:
-            _optimizer = self._get_optimizer()
-            optimizer_cls = _optimizer.__class__
-            optimizer_state = _optimizer.state_dict()
-            optimzer = optimizer_cls(model.parameters(), lr=1)
-            optimzer.load_state_dict(optimizer_state)
-            return optimzer
-        else:
-            return self._get_optimizer()
+        raise NotImplementedError("Model does not have an optimizer.")
 
     # To run locally on OS X, need export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
     def _transform(self, df):
