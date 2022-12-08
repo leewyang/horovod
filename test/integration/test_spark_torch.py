@@ -212,22 +212,23 @@ class SparkTorchTests(unittest.TestCase):
             for field in out_df.schema.fields:
                 assert type(field.dataType) == expected_types[field.name]
 
-    def test_pytorch_get_optimizer_with_unscaled_lr(self):
+    def test_pytorch_get_optimizers_with_unscaled_lr(self):
         hvd_size = 4
         init_learning_rate = 0.001
         hvd_mock = mock.MagicMock()
         hvd_mock.size.return_value = hvd_size
 
-        get_optimizer_with_unscaled_lr_fn = remote._get_optimizer_with_unscaled_lr_fn()
+        get_optimizers_with_unscaled_lr_fn = remote._get_optimizers_with_unscaled_lr_fn()
         model = create_xor_model()
-        current_optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.5)
-        optimizer_cls = current_optimizer.__class__
-        opt_unscaled_lr = get_optimizer_with_unscaled_lr_fn(hvd_mock, current_optimizer,
-                                                            optimizer_cls, model)
+        optimizer_fn = lambda model: [optim.SGD(model.parameters(), lr=0.001, momentum=0.5)]
+        current_optimizers = optimizer_fn(model)
+        opt_unscaled_lr = get_optimizers_with_unscaled_lr_fn(hvd_mock, current_optimizers,
+                                                            optimizer_fn, model)
 
-        optimizer_state = opt_unscaled_lr.state_dict()
-        for i in range(len(optimizer_state['param_groups'])):
-            assert optimizer_state['param_groups'][i]['lr'] == init_learning_rate / hvd_size
+        optimizer_states = [opt.state_dict() for opt in opt_unscaled_lr]
+        for optimizer_state in optimizer_states:
+            for i in range(len(optimizer_state['param_groups'])):
+                assert optimizer_state['param_groups'][i]['lr'] == init_learning_rate / hvd_size
 
     def test_metric_class(self):
         hvd_mock = mock.MagicMock()

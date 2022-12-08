@@ -299,21 +299,22 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
         # Optimizer parameters
         optimizer = self._get_optimizer()
         if isinstance(optimizer, Callable):
-            optimizers = optimizer(model_pre_train)
-            optimizer_state = [opt.state_dict() for opt in optimizers]
-            optimizer_cls = optimizer
-        else:
+            optimizer_fn = optimizer
+        elif isinstance(optimizer, torch.optim.Optimizer):
             optimizer_cls = optimizer.__class__
-            optimizer_state = optimizer.state_dict()
+            optimizer_fn = lambda model: [optimizer_cls(model.parameters(), lr=1)]
+        else:
+            raise ValueError("Unsupported optimizer type: {}".format(type(optimizer)))
 
+        optimizer_states = [opt.state_dict() for opt in optimizer_fn(model_pre_train)]
         # Combine model and optimizer state
-        model_opt_state = {'model': model_state, 'optimizer': optimizer_state} \
+        model_opt_state = {'model': model_state, 'optimizer': optimizer_states} \
             if last_checkpoint_state is None else last_checkpoint_state
         model_opt_state_serialized = save_into_bio(model_opt_state, torch.save)
 
         trainer = remote.RemoteTrainer(self, metadata, last_checkpoint_state, run_id, dataset_idx)
         handle = backend.run(trainer,
-                             args=(serialized_model, optimizer_cls, model_opt_state_serialized,
+                             args=(serialized_model, optimizer_fn, model_opt_state_serialized,
                                    train_rows, val_rows, avg_row_size),
                              env={})
         return self._create_model(handle, run_id, metadata)
@@ -344,7 +345,7 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
         if isinstance(optimizer, list):
             [opt.load_state_dict(best_checkpoint['optimizer'][i]) for i, opt in enumerate(optimizer)]
         else:
-            optimizer.load_state_dict(best_checkpoint['optimizer'])
+            optimizer.load_state_dict(best_checkpoint['optimizer'][0])
 
         return self.get_model_class()(**self._get_model_kwargs(
             model, history, optimizer, run_id, metadata))
