@@ -105,7 +105,7 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
     is_dbfs = isinstance(store, DBFSLocalStore)
     storage_options = store.storage_options
 
-    def train(serialized_model, optimizer_fn, model_opt_state_serialized,
+    def train(serialized_model, optimizer_classes, model_opt_state_serialized,
               train_rows, val_rows, avg_row_size):
         # If not empty, set it before everything else.
         if mp_start_method:
@@ -164,15 +164,22 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
         # Learning rate is a required parameters in SGD optimizer. It will be overridden with
         # load_state_dict.
         optimizer_states = model_opt_state['optimizer']
-        optimizers = optimizer_fn(model)
-        print(f"<<<< optimizers: {optimizers}")
-        print(f"<<<< optimizer_state: {optimizer_states}")
+        model_params = dict(enumerate(model.parameters()))       # idx -> param
+        optimizers = []
+        for opt_cls, state in zip(optimizer_classes, optimizer_states):
+            opt_params = [model_params[i] for i in state['param_groups'][0]['params']]
+            optimizer = opt_cls(opt_params, lr=1)
+            state['param_groups'][0]['params'] = list(range(len(opt_params)))  # TODO: support multiple param_groups
+            optimizers.append(optimizer)
+
+        print(f">>> optimizers: {optimizers}")
+        print(f">>> optimizer_states: {optimizer_states}")
 
         if last_checkpoint_state is not None:
             model.load_state_dict(last_checkpoint_state['model'])
             if isinstance(optimizer_states, list):
-                for i, opt in enumerate(optimizers):
-                    opt.load_state_dict(last_checkpoint_state['optimizer'][i])
+                for opt, state in zip(optimizers, last_checkpoint_state['optimizer']):
+                    opt.load_state_dict(state)
             elif len(optimizers) == 1:   # for backwards-compatibility with old checkpoints
                 optimizers[0].load_state_dict(last_checkpoint_state['optimizer'])
             else:
@@ -184,12 +191,12 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
                     opt_state['param_groups'][i]['lr'] = \
                         opt_state['param_groups'][i]['lr'] * hvd.size()
                 return opt_state
-            for x, opt in enumerate(optimizers):
-                opt.load_state_dict(_scale_lr(optimizer_states[x]))
+            for optimizer, optimizer_state in zip(optimizers, optimizer_states):
+                optimizer.load_state_dict(_scale_lr(optimizer_state))
 
         # Horovod: broadcast parameters & optimizer state.
         hvd.broadcast_parameters(model.state_dict(), root_rank=0)
-        # hvd.broadcast_optimizer_state(optimizer, root_rank=0, model=model)  # TODO: support list of optimizers
+        hvd.broadcast_optimizer_state(optimizer, root_rank=0, model=model)  # TODO: support list of optimizers
 
         def _dist_optimizer(optimizer):
             # Horovod: wrap optimizer with DistributedOptimizer.
@@ -226,7 +233,7 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
             def save_checkpoint():
                 model.cpu()
                 optimizers_with_scaled_down_lr = \
-                    get_optimizers_with_unscaled_lr(hvd, optimizers, optimizer_fn, model)
+                    get_optimizers_with_unscaled_lr(hvd, optimizers, optimizer_classes, model)
                 optimizer_state_dicts = [opt.state_dict() for opt in optimizers_with_scaled_down_lr]
                 state = {
                     'model': model.state_dict(),
@@ -450,7 +457,7 @@ def _train_minibatch_fn():
 
 
 def _get_optimizers_with_unscaled_lr_fn():
-    def get_optimizers_with_unscaled_lr(hvd, current_optimizers, optimizer_fn, model):
+    def get_optimizers_with_unscaled_lr(hvd, current_optimizers, optimizer_classes, model):
         def _scale_lr(optimizer_state):
             # scale down the learning rate with the number of horovod workers
             for i in range(len(optimizer_state['param_groups'])):
@@ -458,10 +465,10 @@ def _get_optimizers_with_unscaled_lr_fn():
                     optimizer_state['param_groups'][i]['lr'] / hvd.size()
             return optimizer_state
 
-        optimizers = optimizer_fn(model)
-        optimizer_state = [_scale_lr(opt.state_dict()) for opt in current_optimizers]
-        for x, opt in enumerate(optimizers):
-            opt.load_state_dict(optimizer_state[x])
+        optimizers = [opt_cls(opt.param_groups) for opt_cls, opt in zip(optimizer_classes, current_optimizers)]
+        optimizer_states = [_scale_lr(opt.state_dict()) for opt in current_optimizers]
+        for opt, optimizer_state in zip(optimizers, optimizer_states):
+            opt.load_state_dict(optimizer_state)
         return optimizers
 
     return get_optimizers_with_unscaled_lr

@@ -220,10 +220,10 @@ class SparkTorchTests(unittest.TestCase):
 
         get_optimizers_with_unscaled_lr_fn = remote._get_optimizers_with_unscaled_lr_fn()
         model = create_xor_model()
-        optimizer_fn = lambda model: [optim.SGD(model.parameters(), lr=0.001, momentum=0.5)]
-        current_optimizers = optimizer_fn(model)
-        opt_unscaled_lr = get_optimizers_with_unscaled_lr_fn(hvd_mock, current_optimizers,
-                                                            optimizer_fn, model)
+        optimizers = [optim.SGD(model.parameters(), lr=0.001, momentum=0.5)]
+        optimizer_classes = [opt.__class__ for opt in optimizers]
+        opt_unscaled_lr = get_optimizers_with_unscaled_lr_fn(hvd_mock, optimizers,
+                                                            optimizer_classes, model)
 
         optimizer_states = [opt.state_dict() for opt in opt_unscaled_lr]
         for optimizer_state in optimizer_states:
