@@ -168,9 +168,9 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
         optimizers = []
         for opt_cls, state in zip(optimizer_classes, optimizer_states):
             opt_params = [model_params[i] for i in state['param_groups'][0]['params']]
-            optimizer = opt_cls(opt_params, lr=1)
+            opt = opt_cls(opt_params, lr=1)
             state['param_groups'][0]['params'] = list(range(len(opt_params)))  # TODO: support multiple param_groups
-            optimizers.append(optimizer)
+            optimizers.append(opt)
 
         print(f">>> optimizers: {optimizers}")
         print(f">>> optimizer_states: {optimizer_states}")
@@ -191,12 +191,12 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
                     opt_state['param_groups'][i]['lr'] = \
                         opt_state['param_groups'][i]['lr'] * hvd.size()
                 return opt_state
-            for optimizer, optimizer_state in zip(optimizers, optimizer_states):
-                optimizer.load_state_dict(_scale_lr(optimizer_state))
+            for opt, state in zip(optimizers, optimizer_states):
+                opt.load_state_dict(_scale_lr(state))
 
         # Horovod: broadcast parameters & optimizer state.
         hvd.broadcast_parameters(model.state_dict(), root_rank=0)
-        hvd.broadcast_optimizer_state(optimizer, root_rank=0, model=model)  # TODO: support list of optimizers
+        [hvd.broadcast_optimizer_state(opt, root_rank=0, model=model) for opt in optimizers]
 
         def _dist_optimizer(optimizer):
             # Horovod: wrap optimizer with DistributedOptimizer.
