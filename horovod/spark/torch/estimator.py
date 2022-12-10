@@ -35,8 +35,8 @@ from horovod.spark.common.serialization import \
     HorovodParamsWriter, HorovodParamsReader
 from horovod.spark.torch import remote
 from horovod.spark.torch.datamodule import PetastormDataModule
-from horovod.spark.torch.util import deserialize_fn, serialize_fn, \
-    save_into_bio
+from horovod.spark.torch.util import deserialize_fn, serialize_fn, save_into_bio, \
+     encode_optimizers, decode_optimizers
 
 from typing import Callable
 
@@ -288,22 +288,10 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
         serialized_model = serialize_fn()(model_pre_train)
 
         # Optimizer parameters
-        optimizer = self._get_optimizer()
-        if isinstance(optimizer, list):
-            optimizers = optimizer
-        elif isinstance(optimizer, torch.optim.Optimizer):
-            optimizers = [optimizer]
-        else:
-            raise ValueError("Unsupported optimizer type: {}".format(type(optimizer)))
+        optimizers = self.getOptimizer()
 
         # Optimizer states, modified to use model param indicies
-        model_param_ids = {id(p):i for i, p in enumerate(model_pre_train.parameters())}
-        optimizer_states = [opt.state_dict() for opt in optimizers]
-        for opt, state in zip(optimizers, optimizer_states):
-            for i, param_group in enumerate(opt.param_groups):
-                opt_param_ids = [model_param_ids[id(p)] for p in param_group['params']]
-                state['param_groups'][i]['params'] = opt_param_ids
-        optimizer_classes = [opt.__class__ for opt in optimizers]
+        optimizer_classes, optimizer_states = encode_optimizers(optimizers, model_pre_train)
         print("<<< optimizer_classes: {}".format(optimizer_classes))
         print("<<< optimizer_states: {}".format(optimizer_states))
 
@@ -337,16 +325,11 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
         serialized_checkpoint.seek(0)
         best_checkpoint = torch.load(serialized_checkpoint, map_location=torch.device('cpu'))
 
-        # get pre-train mappings of optimizer params
         model_pre_train = self.getModel()
-        model_param_ids = {id(p):i for i, p in enumerate(model_pre_train.parameters())}
         optimizers_pre_train = self.getOptimizer()
-        optimizer_classes = [opt.__class__ for opt in optimizers_pre_train]
-        optimizer_states_pre_train = [opt.state_dict() for opt in optimizers_pre_train]
-        for opt, state in zip(optimizers_pre_train, optimizer_states_pre_train):
-            for i, param_group in enumerate(opt.param_groups):
-                opt_param_ids = [model_param_ids[id(p)] for p in param_group['params']]
-                state['param_groups'][i]['params'] = opt_param_ids
+
+        # get pre-train mappings of optimizer params
+        optimizer_classes, optimizer_states = encode_optimizers(optimizers_pre_train, model_pre_train)
 
         # make a copy of the model to load best_checkpoint
         model = copy.deepcopy(self.getModel())
@@ -354,12 +337,7 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
         model.eval()
 
         # make a copy of the optimizers to load best_checkpoint
-        model_params = dict(enumerate(model.parameters()))       # idx -> param
-        optimizers = []
-        for opt_cls, state in zip(optimizer_classes, optimizer_states_pre_train):
-            opt_params = [model_params[i] for i in state['param_groups'][0]['params']]
-            optimizer = opt_cls(opt_params, lr=1)
-            optimizers.append(optimizer)
+        optimizers = decode_optimizers(optimizer_classes, optimizer_states, model)
         [opt.load_state_dict(state) for opt, state in zip(optimizers, best_checkpoint['optimizer'])]
 
         return self.get_model_class()(**self._get_model_kwargs(

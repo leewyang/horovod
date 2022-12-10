@@ -27,7 +27,7 @@ from torch.utils.tensorboard import SummaryWriter
 from horovod.spark.common import constants
 from horovod.spark.common.util import _get_assigned_gpu_or_default, to_list, _set_mp_start_method
 from horovod.spark.common.store import DBFSLocalStore
-from horovod.spark.torch.util import deserialize_fn
+from horovod.spark.torch.util import deserialize_fn, decode_optimizers
 
 PETASTORM_HDFS_DRIVER = constants.PETASTORM_HDFS_DRIVER
 METRIC_PRINT_FREQUENCY = constants.METRIC_PRINT_FREQUENCY
@@ -165,14 +165,8 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
         # load_state_dict.
         optimizer_states = model_opt_state['optimizer']
         model_params = dict(enumerate(model.parameters()))       # idx -> param
-        optimizers = []
-        for opt_cls, state in zip(optimizer_classes, optimizer_states):
-            opt_params = [model_params[i] for i in state['param_groups'][0]['params']]
-            opt = opt_cls(opt_params, lr=1)
-            state['param_groups'][0]['params'] = list(range(len(opt_params)))  # TODO: support multiple param_groups
-            optimizers.append(opt)
-
-        print(f">>> optimizers: {optimizers}")
+        optimizers = decode_optimizers(optimizer_classes, optimizer_states, model)
+        # print(f">>> optimizers: {optimizers}")
         print(f">>> optimizer_states: {optimizer_states}")
 
         if last_checkpoint_state is not None:
@@ -467,8 +461,8 @@ def _get_optimizers_with_unscaled_lr_fn():
 
         optimizers = [opt_cls(opt.param_groups) for opt_cls, opt in zip(optimizer_classes, current_optimizers)]
         optimizer_states = [_scale_lr(opt.state_dict()) for opt in current_optimizers]
-        for opt, optimizer_state in zip(optimizers, optimizer_states):
-            opt.load_state_dict(optimizer_state)
+        for opt, state in zip(optimizers, optimizer_states):
+            opt.load_state_dict(state)
         return optimizers
 
     return get_optimizers_with_unscaled_lr

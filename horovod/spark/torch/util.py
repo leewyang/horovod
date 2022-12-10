@@ -97,3 +97,37 @@ def save_into_bio_fn():
 def save_into_bio(obj, save_obj_fn):
     _save_into_bio = save_into_bio_fn()
     return _save_into_bio(obj, save_obj_fn)
+
+
+def encode_optimizers(optimizers, model):
+    """Returns optimizer classes and modified states, where the param ids are mapped to their
+    absolute indices in the associated model parameters.
+
+    Note: the optimizer_states produced by this method should only be consumed by the
+    decode_optimizers method.
+    """
+    model_param_ids = {id(p):i for i, p in enumerate(model.parameters())}     # id(param) -> index
+    optimizer_classes = [opt.__class__ for opt in optimizers]
+    optimizer_states = [opt.state_dict() for opt in optimizers]
+
+    # replace optimizer 'params' with model-relative indices
+    for opt, state in zip(optimizers, optimizer_states):
+        for i, param_group in enumerate(opt.param_groups):
+            opt_param_ids = [model_param_ids[id(p)] for p in param_group['params']]
+            state['param_groups'][i]['params'] = opt_param_ids
+    return optimizer_classes, optimizer_states
+
+
+def decode_optimizers(optimizer_classes, optimizer_states, model):
+    """Reconstructs optimizers from classes and modified states, relative to the given model instance."""
+    model_params = dict(enumerate(model.parameters()))                        # index -> param
+    optimizers = []
+    for opt_cls, state in zip(optimizer_classes, optimizer_states):
+        param_groups = []
+        for param_group in state['param_groups']:
+            opt_params = [model_params[i] for i in param_group['params']]
+            param_groups.append({'params': opt_params})
+        opt = opt_cls(param_groups, lr=1)
+        opt.load_state_dict(state)
+        optimizers.append(opt)
+    return optimizers
