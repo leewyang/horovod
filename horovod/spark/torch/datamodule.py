@@ -191,11 +191,11 @@ class NVTabularDataModule(DataModule):
                 features[k] = torch.vstack(v[0].tensor_split(indices[1:]))
         return features, label
 
-    def train_data(self):
+    def __enter__(self):
         import nvtabular as nvt
-        from nvtabular.loader.torch import TorchAsyncItr, DLDataLoader
-
-        train_dataset = TorchAsyncItr(
+        from nvtabular.loader.torch import TorchAsyncItr
+        super().__enter__()
+        self.train_dataset = TorchAsyncItr(
             nvt.Dataset(self.train_dir, engine='parquet', calculate_divisions=True, **self.kwargs),
             batch_size=self.train_batch_size,
             cats=self.categorical_cols,
@@ -207,14 +207,7 @@ class NVTabularDataModule(DataModule):
             global_rank=hvd.rank(),
             seed_fn=self.seed_fn)
 
-        train_dataloader = DLDataLoader(train_dataset, batch_size=None, collate_fn=lambda x: x, pin_memory=False, num_workers=0)
-        return MapIterable(train_dataloader, epochs=self.num_train_epochs, map_fn=self._transform)
-
-    def val_data(self):
-        import nvtabular as nvt
-        from nvtabular.loader.torch import TorchAsyncItr, DLDataLoader
-
-        val_dataset = TorchAsyncItr(
+        self.val_dataset = TorchAsyncItr(
             nvt.Dataset(self.val_dir, engine='parquet', calculate_divisions=True, **self.kwargs),
             batch_size=self.val_batch_size,
             cats=self.categorical_cols,
@@ -225,5 +218,21 @@ class NVTabularDataModule(DataModule):
             global_size=hvd.size(),
             global_rank=hvd.rank()) if self.has_val else None
 
-        val_dataloader = DLDataLoader(val_dataset, batch_size=None, collate_fn=lambda x: x, pin_memory=False, num_workers=0)
+        return self
+
+    def __exit__(self, type, value, traceback):
+        if self.val_dataset:
+            self.val_dataset.stop()
+        if self.train_dataset:
+            self.train_dataset.stop()
+
+    def train_data(self):
+        from nvtabular.loader.torch import DLDataLoader
+        train_dataloader = DLDataLoader(self.train_dataset, batch_size=None, collate_fn=lambda x: x, pin_memory=False, num_workers=0)
+        return MapIterable(train_dataloader, epochs=self.num_train_epochs, map_fn=self._transform)
+
+    def val_data(self):
+        import nvtabular as nvt
+        from nvtabular.loader.torch import DLDataLoader
+        val_dataloader = DLDataLoader(self.val_dataset, batch_size=None, collate_fn=lambda x: x, pin_memory=False, num_workers=0)
         return MapIterable(val_dataloader, epochs=self.num_train_epochs, map_fn=self._transform)
