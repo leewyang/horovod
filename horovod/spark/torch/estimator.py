@@ -38,8 +38,6 @@ from horovod.spark.torch.datamodule import PetastormDataModule
 from horovod.spark.torch.util import deserialize_fn, serialize_fn, save_into_bio, \
      encode_optimizers, decode_optimizers
 
-from typing import Callable
-
 import numpy as np
 import torch
 import torch.utils.data

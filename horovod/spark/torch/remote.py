@@ -365,7 +365,7 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
                     update_metrics(metric_value_groups, outputs, labels)
                     train_loss.update(loss)
                     print_metrics(batch_idx, train_loss, metric_value_groups, 'train')
-                [opt.step for opt in optimizers]
+                [opt.step() for opt in optimizers]
 
                 return aggregate_metrics('train', epoch, train_loss, metric_value_groups)
 
