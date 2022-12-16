@@ -20,6 +20,7 @@ import sys
 import unittest
 import warnings
 
+import copy
 import mock
 import numpy as np
 import torch.nn as nn
@@ -37,6 +38,7 @@ from horovod.runner.mpi_run import is_open_mpi
 from horovod.spark.common import constants, util
 from horovod.spark.torch import remote
 from horovod.spark.torch.estimator import EstimatorParams, _torch_param_serialize
+from horovod.spark.torch.util import decode_optimizers, encode_optimizers
 from horovod.torch.elastic import run
 
 sys.path.append(os.path.join(os.path.dirname(__file__), os.pardir, 'utils'))
@@ -229,6 +231,26 @@ class SparkTorchTests(unittest.TestCase):
         for optimizer_state in optimizer_states:
             for i in range(len(optimizer_state['param_groups'])):
                 assert optimizer_state['param_groups'][i]['lr'] == init_learning_rate / hvd_size
+
+    def test_serialize_optimizers(self):
+        model = create_xor_model()
+        model_params = list(model.parameters())
+        optimizers = [
+            torch.optim.SGD(model_params[0:2], lr=0.1),
+            torch.optim.Adam(model_params[2:4], lr=0.2)
+        ]
+        classes, state, params = encode_optimizers(optimizers, model)
+
+        new_model = copy.deepcopy(model)
+        new_model_param_ids = [id(p) for p in new_model.parameters()]
+        new_optimizers = decode_optimizers(classes, state, params, new_model)
+        for opt in new_optimizers:
+            for group in opt.param_groups:
+                param_ids = [id(p) for p in group['params']]
+                assert set(param_ids) <= set(new_model_param_ids)
+
+        for old, new in zip(optimizers, new_optimizers):
+            assert old.state_dict() == new.state_dict()
 
     def test_metric_class(self):
         hvd_mock = mock.MagicMock()

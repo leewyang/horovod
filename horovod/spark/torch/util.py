@@ -110,22 +110,26 @@ def encode_optimizers(optimizers, model):
     optimizer_classes = [opt.__class__ for opt in optimizers]
     optimizer_states = [opt.state_dict() for opt in optimizers]
 
-    # replace optimizer 'params' with model-relative indices
-    for opt, state in zip(optimizers, optimizer_states):
-        for i, param_group in enumerate(opt.param_groups):
+    # get optimizer 'params' with model-relative indices
+    optimizer_params = []
+    for opt in optimizers:
+        opt_param_group = []
+        for param_group in opt.param_groups:
             opt_param_ids = [model_param_ids[id(p)] for p in param_group['params']]
-            state['param_groups'][i]['params'] = opt_param_ids
-    return optimizer_classes, optimizer_states
+            opt_param_group.append(opt_param_ids)
+        optimizer_params.append(opt_param_group)
+    return optimizer_classes, optimizer_states, optimizer_params
 
 
-def decode_optimizers(optimizer_classes, optimizer_states, model):
-    """Reconstructs optimizers from classes and modified states, relative to the given model instance."""
+def decode_optimizers(optimizer_classes, optimizer_states, optimizer_params, model):
+    """Reconstructs optimizers from classes, state_dicts, and param ids relative to the given
+    model instance."""
     model_params = dict(enumerate(model.parameters()))                        # index -> param
     optimizers = []
-    for opt_cls, state in zip(optimizer_classes, optimizer_states):
+    for opt_cls, state, params in zip(optimizer_classes, optimizer_states, optimizer_params):
         param_groups = []
-        for param_group in state['param_groups']:
-            opt_params = [model_params[i] for i in param_group['params']]
+        for param_group in params:
+            opt_params = [model_params[i] for i in param_group]
             param_groups.append({'params': opt_params})
         opt = opt_cls(param_groups, lr=1)
         opt.load_state_dict(state)

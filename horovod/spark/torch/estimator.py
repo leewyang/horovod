@@ -289,12 +289,13 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
         optimizers = self.getOptimizer()
 
         # Optimizer states, modified to use model param indicies
-        optimizer_classes, optimizer_states = encode_optimizers(optimizers, model_pre_train)
+        optimizer_classes, optimizer_states, optimizer_params = encode_optimizers(optimizers, model_pre_train)
         print("<<< optimizer_classes: {}".format(optimizer_classes))
         print("<<< optimizer_states: {}".format(optimizer_states))
+        print("<<< optimizer_params: {}".format(optimizer_params))
 
         # Combine model and optimizer state
-        model_opt_state = {'model': model_state, 'optimizer': optimizer_states} \
+        model_opt_state = {'model': model_state, 'optimizer': optimizer_states, 'params': optimizer_params} \
             if last_checkpoint_state is None else last_checkpoint_state
         model_opt_state_serialized = save_into_bio(model_opt_state, torch.save)
 
@@ -327,7 +328,7 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
         optimizers_pre_train = self.getOptimizer()
 
         # get pre-train mappings of optimizer params
-        optimizer_classes, optimizer_states = encode_optimizers(optimizers_pre_train, model_pre_train)
+        optimizer_classes, optimizer_states, optimizer_params = encode_optimizers(optimizers_pre_train, model_pre_train)
 
         # make a copy of the model to load best_checkpoint
         model = copy.deepcopy(self.getModel())
@@ -335,7 +336,7 @@ class TorchEstimator(HorovodEstimator, TorchEstimatorParamsWritable,
         model.eval()
 
         # make a copy of the optimizers to load best_checkpoint
-        optimizers = decode_optimizers(optimizer_classes, optimizer_states, model)
+        optimizers = decode_optimizers(optimizer_classes, optimizer_states, optimizer_params, model)
         [opt.load_state_dict(state) for opt, state in zip(optimizers, best_checkpoint['optimizer'])]
 
         return self.get_model_class()(**self._get_model_kwargs(

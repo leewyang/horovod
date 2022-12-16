@@ -27,7 +27,7 @@ from torch.utils.tensorboard import SummaryWriter
 from horovod.spark.common import constants
 from horovod.spark.common.util import _get_assigned_gpu_or_default, to_list, _set_mp_start_method
 from horovod.spark.common.store import DBFSLocalStore
-from horovod.spark.torch.util import deserialize_fn, decode_optimizers
+from horovod.spark.torch.util import deserialize_fn, decode_optimizers, encode_optimizers
 
 PETASTORM_HDFS_DRIVER = constants.PETASTORM_HDFS_DRIVER
 METRIC_PRINT_FREQUENCY = constants.METRIC_PRINT_FREQUENCY
@@ -164,10 +164,11 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
         # Learning rate is a required parameters in SGD optimizer. It will be overridden with
         # load_state_dict.
         optimizer_states = model_opt_state['optimizer']
-        model_params = dict(enumerate(model.parameters()))       # idx -> param
-        optimizers = decode_optimizers(optimizer_classes, optimizer_states, model)
-        # print(f">>> optimizers: {optimizers}")
+        optimizer_params = model_opt_state['params']
         print(f">>> optimizer_states: {optimizer_states}")
+        print(f">>> optimizer_params: {optimizer_params} ")
+        optimizers = decode_optimizers(optimizer_classes, optimizer_states, optimizer_params, model)
+        print(f">>> optimizers: {optimizers}")
 
         if last_checkpoint_state is not None:
             model.load_state_dict(last_checkpoint_state['model'])
@@ -228,10 +229,11 @@ def RemoteTrainer(estimator, metadata, last_checkpoint_state, run_id, dataset_id
                 model.cpu()
                 optimizers_with_scaled_down_lr = \
                     get_optimizers_with_unscaled_lr(hvd, optimizers, optimizer_classes, model)
-                optimizer_state_dicts = [opt.state_dict() for opt in optimizers_with_scaled_down_lr]
+                _, optimizer_state, optimizer_params = encode_optimizers(optimizers_with_scaled_down_lr, model)
                 state = {
                     'model': model.state_dict(),
-                    'optimizer': optimizer_state_dicts,
+                    'optimizer': optimizer_state,
+                    'params': optimizer_params
                 }
                 torch.save(state, ckpt_file)
                 if cuda_available:
